@@ -1,0 +1,481 @@
+# Natural Language to SQL Pipeline Configuration
+# Academic Research Project Configuration File
+#
+# This configuration file controls all aspects of the NLP-to-SQL pipeline including:
+# - Data paths and model configurations
+# - Phase-specific parameters for schema linking, SQL generation, and selection
+# - Logging, evaluation, and execution settings
+#
+# CURRENT CONFIGURATION:
+# - Uses local XiYan model for SQL fixing, schema refinement, and ranking (fully cost-optimized)
+# - Can be configured to use commercial models (GPT-4o, Gemini) for better performance
+# - Expected cost with commercial models: ~$0.005-0.03 per question
+# - Expected cost with local models only: $0 (GPU usage only)
+
+# =============================================================================
+# DATA CONFIGURATION
+# Paths to datasets, databases, and output directories
+# =============================================================================
+data:
+  # BIRD benchmark dataset paths
+  bird_benchmark_path: "data/bird_benchmark"              # Root directory for BIRD benchmark
+  dev_json_path: "data/bird_benchmark/dev.json"           # Development questions in JSON format
+  databases_path: "data/bird_benchmark/dev_databases"     # SQLite database files directory
+  
+  # Pipeline output and checkpoint directories (created automatically)
+  checkpoints_path: "data/checkpoints"                    # Checkpoint files for resuming execution
+  results_path: "data/results"                           # Final pipeline results and evaluations
+  candidate_pools_path: "data/candidate_pools"           # SQL candidate pools for reuse
+
+# =============================================================================
+# LOGGING CONFIGURATION
+# Controls detailed logging, monitoring, and prompt saving
+# =============================================================================
+logging:
+  # Basic logging settings
+  log_directory: "logs"                                   # Directory for all log files
+  log_level: "INFO"                                      # Log verbosity: DEBUG, INFO, WARNING, ERROR
+  log_format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"  # Python logging format
+  
+  # Phase-specific log files (optional, logs to main if not specified)
+  main_log: "pipeline_main.log"                          # Main pipeline execution log
+  phase1_log: "phase1_schema_linking.log"                # Schema linking phase log
+  phase2_log: "phase2_sql_generation.log"                # SQL generation phase log
+  phase3_log: "phase3_sql_selection.log"                 # SQL selection phase log
+  evaluation_log: "evaluation.log"                       # Evaluation results log
+  
+  # Structured logging for analysis
+  json_logs: true                                         # Enable JSON-formatted logs for analysis
+  json_log_file: "pipeline_execution.json"               # Structured log file for machine parsing
+  log_model_outputs: true                                 # Log complete model inputs/outputs for analysis (makes logs larger)
+  
+  # Prompt inspection and debugging
+  save_prompts: true                                      # Save all prompts sent to models for inspection
+  prompts_directory: "logs/prompts"                      # Directory for saved prompts (organized by phase)
+
+# =============================================================================
+# MODEL CONFIGURATION
+# Defines embedding models, SQL generation models, and commercial API models
+# =============================================================================
+models:
+  # Local model storage (for downloaded HuggingFace models)
+  local_models_path: "data/models"                       # Cache directory for downloaded models
+  enable_model_reuse: true                               # Reuse same models across different purposes to save memory
+  
+  # Embedding model for Phase 1 (schema linking)
+  embedding:
+    model_name: "Qwen/Qwen3-Embedding-8B"                # HuggingFace model identifier
+    device: "cuda"                                        # Device: "cuda", "cpu", or "auto"
+    batch_size: 32                                        # Batch size for embedding computation
+    max_length: 512                                       # Maximum token length for embeddings
+    
+  # SQL Generation models for Phase 2 (open-source only)
+  # These models generate SQL candidates from natural language questions
+  sql_generation:
+    models:
+      - name: "XGenerationLab/XiYanSQL-QwenCoder-32B-2504"  # Main SQL generation model
+        type: "open_source"                               # Model type (always open_source for Phase 2)
+        device: "cuda"                                    # GPU device for inference
+        local_path: null                                  # Optional: Local directory path if model already downloaded
+        max_new_tokens: 512                              # Maximum tokens to generate
+        temperature_options: [0.1, 0.3, 0.7]            # Temperature values for diversity sampling
+        
+      - name: "Snowflake/Arctic-Text2SQL-R1-7B"          # Alternative SQL generation model
+        type: "open_source"                               # Model type
+        device: "cuda"                                    # GPU device for inference
+        local_path: null                                  # Optional: Local directory path if model already downloaded
+        max_new_tokens: 512                              # Maximum tokens to generate
+        temperature_options: [0.1, 0.3, 0.7]            # Temperature values for diversity sampling
+    
+    # Example using pre-downloaded models:
+    # models:
+    #   - name: "XGenerationLab/XiYanSQL-QwenCoder-32B-2504"
+    #     type: "open_source"
+    #     device: "cuda"
+    #     local_path: "/home/user/models/xiyan-qwen-32b"  # Path to downloaded model directory
+    #     max_new_tokens: 512
+    #     temperature_options: [0.1, 0.3, 0.7]
+  
+  # Commercial API models (Phase 1 refinement, Phase 3 ranking, SQL fixing)
+  # Note: Commercial models are NOT used for Phase 2 SQL generation
+  commercial:
+    gpt4o:
+      api_key_env: "OPENAI_API_KEY"                      # Environment variable for API key
+      api_key: "your-open-ai-api-key-here"               # Direct API key (use env var in production)
+      model: "gpt-4o"                                    # OpenAI model identifier
+      max_tokens: 1000                                   # Maximum response tokens
+      temperature: 0.1                                   # Low temperature for consistent responses
+      
+    gemini:
+      api_key_env: "GEMINI_API_KEY"                      # Environment variable for Gemini API key
+      api_key: "your-gemini-api-key-here"                # Add your Gemini API key here if needed
+      model: "gemini-1.5-pro"                           # Google Gemini model identifier
+      max_tokens: 1000                                   # Maximum response tokens
+      temperature: 0.1                                  # Low temperature for consistent responses
+
+# =============================================================================
+# PHASE 1: SCHEMA LINKING CONFIGURATION
+# Controls database schema analysis and table/column selection
+# =============================================================================
+phase1_schema_linking:
+  # Hybrid Table-Column Schema Linking (HyTCSL) parameters
+  top_k_tables: 10                                      # Maximum tables to consider initially
+  top_k_columns_per_table: 5                           # Maximum columns per table to consider
+  
+  # Schema expansion for JOIN operations
+  include_join_tables: true                             # Include tables needed for JOINs
+  max_join_depth: 2                                     # Maximum depth for JOIN table expansion
+  
+  # Content and value-based linking
+  enable_value_linking: true                            # Match question values with database content
+  value_similarity_threshold: 0.8                      # Similarity threshold for value matching (0-1)
+  
+  # LLM-based schema refinement (configurable model type)
+  enable_llm_refinement: true                           # Use LLM to refine schema selection
+  refinement_model: "gpt4o"  # Model for refinement: "gpt4o", "gemini", or local model name
+  refinement_model_type: "commercial"                       # Model type: "commercial" or "local"
+  refinement_model_path: null                          # Optional: Local directory path if model already downloaded (null = auto-download)
+  max_refinement_tokens: 2000                          # Maximum tokens for refinement prompt/response
+  use_json_output: true                                # Use JSON output format for consistent parsing (commercial models only)
+  
+  # Database descriptions integration
+  include_database_descriptions: true                   # Include detailed CSV descriptions in refinement prompts
+  max_description_length: 8000                         # Maximum description length to avoid token overflow
+  
+  # Alternative refinement model configurations:
+  # Commercial model options (API cost but potentially better performance):
+  # refinement_model: "gpt4o"                                      # Use GPT-4o for refinement
+  # refinement_model_type: "commercial"                            # Use commercial model
+  # refinement_model: "gemini"                                     # Use Gemini for refinement
+  # refinement_model_type: "commercial"                            # Use commercial model
+  #
+  # Other local model options (no API cost, uses GPU):
+  # refinement_model: "Snowflake/Arctic-Text2SQL-R1-7B"           # Use Arctic model for refinement
+  # refinement_model_type: "local"                                # Use local model
+  # refinement_model_path: "/path/to/local/arctic-model"          # Optional: use pre-downloaded model
+  #
+  # Using pre-downloaded models (faster startup, no download):
+  # refinement_model: "XGenerationLab/XiYanSQL-QwenCoder-32B-2504"
+  # refinement_model_type: "local"
+  # refinement_model_path: "/home/user/models/xiyan-qwen-32b"     # Path to downloaded model directory
+  #
+  # Database descriptions configuration:
+  # include_database_descriptions: false                          # Disable descriptions if not needed
+  # max_description_length: 4000                                  # Reduce length limit for shorter prompts
+  
+  # Schema representation formats for Phase 2
+  # Multiple formats provide different perspectives to SQL generation models
+  schema_representations:
+    - "m_schema"                                        # M-Schema format (academic standard)
+    - "ddl"                                            # Data Definition Language (CREATE TABLE statements)
+    - "json"                                           # JSON schema representation
+    - "markdown"                                       # Human-readable markdown format
+  
+  # Database content sampling for context
+  include_examples: true                                # Include sample data in schema representations
+  max_examples_per_column: 3                          # Maximum example values per column
+  include_statistics: true                             # Include basic statistics (count, distinct values)
+
+# =============================================================================
+# PHASE 2: SQL GENERATION CONFIGURATION
+# Controls SQL candidate generation using multiple models and strategies
+# =============================================================================
+phase2_sql_generation:
+  # Candidate generation strategy
+  candidates_per_model: 1                              # SQL candidates per model configuration
+  enable_checkpointing: true                           # Save progress for long-running jobs
+  checkpoint_interval: 5                             # Save checkpoint every N questions
+  
+  # Schema representation variants (must match Phase 1 representations)
+  schema_representations:
+    - "m_schema"                                        # M-Schema format
+    - "ddl"                                            # DDL format
+    - "json"                                           # JSON format
+    - "markdown"                                       # Markdown format
+  
+  # Stochastic sampling for diversity
+  temperature_values: [0.1, 0.3, 0.7]                 # Temperature values: low (conservative) to high (creative)
+  
+  # Few-shot learning configuration
+  enable_few_shot: true                                # Include example question-SQL pairs in prompts
+  few_shot_examples: 3                                 # Number of examples to include
+  
+  # SQL validation and automatic fixing
+  enable_sql_validation: true                          # Validate generated SQL syntax
+  enable_sql_fixing: true                              # Attempt to fix invalid SQL using LLM
+  sql_fix_model: "XGenerationLab/XiYanSQL-QwenCoder-32B-2504"  # Model for SQL fixing: "gpt4o", "gemini", or local model name
+  sql_fix_model_type: "local"                          # Model type: "commercial" or "local"
+  sql_fix_model_path: null                             # Optional: Local directory path if model already downloaded
+  max_fix_attempts: 3                                  # Maximum attempts to fix invalid SQL
+  
+  # Alternative configurations for SQL fixing:
+  # Commercial model options (cost ~$0.001-0.005 per fix):
+  # sql_fix_model: "gpt4o"                                       # Use GPT-4o for fixing
+  # sql_fix_model_type: "commercial"                             # Use commercial model
+  # sql_fix_model: "gemini"                                      # Use Gemini for fixing
+  # sql_fix_model_type: "commercial"                             # Use commercial model
+  #
+  # Local model options (no API cost, uses GPU):
+  # sql_fix_model: "Snowflake/Arctic-Text2SQL-R1-7B"            # Use Arctic model for fixing
+  # sql_fix_model_type: "local"                                  # Use local model
+  # sql_fix_model_path: "/path/to/local/arctic-model"           # Optional: use pre-downloaded model
+  
+  # Additional sampling parameters
+  top_p: 0.9                                          # Nucleus sampling parameter (0-1)
+  top_k: 50                                           # Top-k sampling parameter
+
+# =============================================================================
+# PHASE 3: SQL SELECTION CONFIGURATION
+# Controls candidate filtering, ranking, and final SQL selection
+# =============================================================================
+phase3_sql_selection:
+  # Candidate filtering and deduplication
+  remove_syntax_errors: true                           # Filter out syntactically invalid SQL
+  remove_duplicates: true                              # Remove semantically duplicate candidates
+  canonicalization_method: "sqlglot"                   # Method for SQL canonicalization: "sqlglot" or "simple"
+  
+  # LLM-based candidate ranking (configurable model type)
+  ranking_model: "gpt4o"  # Model for ranking: "gpt4o", "gemini", or local model name
+  ranking_model_type: "commercial"                         # Model type: "commercial" or "local"
+  ranking_model_path: null                            # Optional: Local directory path if model already downloaded
+  enable_chain_of_thought: true                        # Use chain-of-thought reasoning in ranking
+  max_ranking_tokens: 1500                            # Maximum tokens for ranking prompt/response
+  use_json_output: true                                # Use JSON output format for consistent parsing (commercial models only)
+  
+  # Alternative ranking model configurations:
+  # Commercial model options (API cost but potentially better performance):
+  # ranking_model: "gpt4o"                                         # Use GPT-4o for ranking
+  # ranking_model_type: "commercial"                               # Use commercial model
+  # ranking_model: "gemini"                                        # Use Gemini for ranking
+  # ranking_model_type: "commercial"                               # Use commercial model
+  #
+  # Other local model options (no API cost, uses GPU):
+  # ranking_model: "Snowflake/Arctic-Text2SQL-R1-7B"              # Use Arctic model for ranking
+  # ranking_model_type: "local"                                    # Use local model
+  # ranking_model_path: "/path/to/local/arctic-model"             # Optional: use pre-downloaded model
+  
+  # Voting and consensus mechanisms
+  enable_majority_voting: true                         # Consider popularity of similar candidates
+  enable_execution_voting: true                        # Consider execution-based criteria (if available)
+  
+  # Value alignment verification
+  enable_value_alignment: true                         # Check if SQL references values from question
+  value_alignment_threshold: 0.9                      # Threshold for value alignment score (0-1)
+  
+  # Self-consistency checks
+  enable_self_consistency: true                        # Check consistency across different model outputs
+  consistency_threshold: 0.7                          # Threshold for consistency score (0-1)
+
+# =============================================================================
+# EVALUATION CONFIGURATION
+# Controls result evaluation, metrics calculation, and performance tracking
+# =============================================================================
+evaluation:
+  # BIRD benchmark evaluation settings
+  enable_execution_evaluation: true                    # Execute SQL against databases for accuracy
+  execution_timeout: 30.0                             # Timeout for SQL execution (seconds)
+  num_cpus: 1                                         # Number of CPU cores for parallel evaluation
+  
+  # Detailed accuracy analysis
+  calculate_by_difficulty: true                        # Break down accuracy by question difficulty
+  calculate_by_database: true                          # Break down accuracy by database
+  
+  # Cost and usage tracking
+  track_token_usage: true                             # Track API token consumption
+  cost_tracking: true                                 # Calculate estimated API costs
+  
+  # Output formats
+  save_detailed_results: true                         # Save complete pipeline results
+  save_statistics: true                               # Save execution statistics
+  
+  # Ground truth references (for accuracy calculation)
+  ground_truth_sql_path: "data/bird_benchmark/dev_gold.sql"  # Reference SQL queries
+  difficulty_json_path: "data/bird_benchmark/dev.json"       # Question difficulty metadata
+
+# =============================================================================
+# PIPELINE EXECUTION CONFIGURATION
+# Controls pipeline flow, resource management, and session handling
+# =============================================================================
+execution:
+  # Pipeline control and subset processing
+  max_questions: null                                   # Limit processing: null (all questions) or number
+  start_from_checkpoint: false                         # Resume from latest checkpoint
+  checkpoint_name: null                                # Specific checkpoint file to resume from
+  
+  # Resource management and limits
+  max_memory_gb: 32                                    # Maximum RAM usage (GB) - monitoring only
+  max_gpu_memory_gb: 24                               # Maximum GPU memory (GB) - monitoring only
+  
+  # Parallel processing (experimental)
+  enable_parallel_processing: false                    # Enable parallel question processing
+  max_workers: 4                                       # Number of parallel workers
+  
+  # Demo and testing modes
+  demo_mode: false                                     # Enable single-question demo mode
+  demo_question_id: 0                                 # Question ID for demo mode
+  
+  # Progressive metrics display
+  show_progressive_metrics: true                       # Show accuracy/execution metrics after each question
+  progressive_metrics_frequency: 1                    # Show metrics every N questions (1=every question)
+  
+  # SQL execution results logging
+  show_sql_execution_results: true                    # Show SQL execution results in terminal
+  max_result_rows_display: 3                          # Maximum rows to display in terminal (0=disable)
+  log_sql_execution_to_json: true                     # Log detailed SQL execution results to JSON files
+  
+  # Model outputs in results
+  include_model_outputs_in_results: true              # Include all model raw outputs in pipeline_results.json
+  
+  # Session management (for cluster environments)
+  max_session_time_hours: 3.5                         # Maximum session duration (for H100 clusters)
+  auto_checkpoint_on_timeout: true                     # Automatically save checkpoint on timeout
+
+# =============================================================================
+# ADVANCED CONFIGURATION
+# Advanced features, caching, monitoring, and debugging options
+# =============================================================================
+advanced:
+  # Caching and performance optimization
+  enable_caching: true                                 # Cache intermediate results for faster reruns
+  cache_directory: "data/cache"                       # Directory for cached data
+  
+  # Error handling and robustness
+  continue_on_error: true                              # Continue processing despite individual failures
+  max_errors_per_phase: 10                            # Maximum errors before aborting phase
+  
+  # System monitoring and progress tracking
+  enable_progress_bars: true                           # Show progress bars during execution
+  enable_memory_monitoring: false                       # Monitor and log memory usage
+  enable_gpu_monitoring: false                          # Monitor and log GPU usage
+  
+  # Reproducibility and debugging
+  random_seed: 42                                      # Random seed for reproducible results
+  deterministic_mode: false                            # Enable deterministic model outputs (slower)
+
+# =============================================================================
+# CONFIGURATION NOTES AND BEST PRACTICES
+# =============================================================================
+#
+# 1. RESOURCE ALLOCATION:
+#    - Each SQL model requires ~15-30GB GPU memory
+#    - Embedding model requires ~15GB GPU memory
+#    - Adjust max_questions for available resources
+#
+# 2. COST OPTIMIZATION:
+#    - All models default to local models (XiYan) for zero API costs
+#    - Commercial models (GPT-4o, Gemini) available for potentially better performance
+#    - Expected cost with local models: $0 (GPU usage only)
+#    - Expected cost with commercial models: ~$0.005-0.03 per question
+#    - Cost optimization options:
+#      * Use local models: set refinement_model_type: "local" and ranking_model_type: "local"
+#      * Disable LLM refinement: set enable_llm_refinement: false
+#      * Mix local/commercial: use local for some phases, commercial for others
+#      * Use pre-downloaded models: set local_path to existing model directories
+#
+# 3. PERFORMANCE TUNING:
+#    - Reduce candidates_per_model for faster execution
+#    - Reduce schema_representations for fewer model calls
+#    - Disable SQL fixing for speed (accept more invalid candidates)
+#    - Use local models for SQL fixing to avoid API latency
+#
+# 4. QUALITY VS SPEED:
+#    - More temperature values = higher diversity but slower execution
+#    - More schema representations = better coverage but more GPU memory
+#    - LLM refinement improves accuracy but adds API costs
+#
+# 5. DEBUGGING:
+#    - Set log_level to "DEBUG" for detailed execution logs
+#    - Enable save_prompts to inspect all model inputs
+#    - Use demo_mode for single question testing
+#
+# 6. CLUSTER USAGE:
+#    - Set max_session_time_hours for cluster time limits
+#    - Enable checkpointing for long-running jobs
+#    - Use max_questions to process in batches
+#
+# 7. USING PRE-DOWNLOADED LOCAL MODELS:
+#    - All local models support specifying a local directory path
+#    - This is useful if you've already downloaded models and want to avoid re-downloading
+#    - Local paths should point to the model directory containing config.json and model files
+#    - Examples:
+#      * SQL Generation: Set local_path in models.sql_generation.models[].local_path
+#      * Schema Refinement: Set refinement_model_path in phase1_schema_linking
+#      * SQL Ranking: Set ranking_model_path in phase3_sql_selection  
+#      * SQL Fixing: Set sql_fix_model_path in phase2_sql_generation
+#    - If local_path is null or not specified, models will be auto-downloaded from HuggingFace
+#    - Local paths must contain a valid HuggingFace model structure (config.json, tokenizer files, etc.)
+#
+# 8. SQL EXECUTION RESULTS LOGGING:
+#    - The pipeline logs detailed SQL execution results for analysis and debugging
+#    - JSON Logging: Complete execution results saved to logs/pipeline_execution.json
+#      * Includes predicted and ground truth SQL queries
+#      * Contains actual execution results (rows returned)
+#      * Tracks execution success/failure and accuracy
+#      * Configure with log_sql_execution_to_json: true/false
+#    - Terminal Display: Shows execution results during pipeline execution
+#      * Displays row counts and sample data for predicted and ground truth results
+#      * Shows result comparison and accuracy status
+#      * Configure with show_sql_execution_results: true/false
+#      * Control sample size with max_result_rows_display (0=disable row display)
+#    - Use these logs to analyze model performance, debug incorrect results, and understand execution patterns
+#
+# 9. DATABASE DESCRIPTIONS INTEGRATION:
+#    - Phase 1 schema refinement includes natural language descriptions from CSV files
+#    - CSV files in database_description/ directories provide business context and explanations
+#    - Only natural language descriptions are included (no DDL duplication with M-Schema)
+#    - Descriptions help the LLM understand table purposes, column meanings, and data relationships
+#    - Configure with include_database_descriptions: true/false
+#    - Control description length with max_description_length to manage prompt size
+#    - Improves schema selection accuracy for complex databases with ambiguous table/column names
+#
+# 10. JSON OUTPUT FORMAT OPTIMIZATION:
+#    - The pipeline supports standardized JSON output formats for LLM responses
+#    - Schema Refinement (Phase 1): JSON format for consistent parsing of refined tables/columns
+#      * Configure with phase1_schema_linking.use_json_output: true/false
+#      * Only applies to commercial models (GPT-4o, Gemini) - local models use text format
+#      * Provides structured output with confidence scores and detailed reasoning
+#    - SQL Ranking (Phase 3): JSON format for consistent parsing of candidate rankings
+#      * Configure with phase3_sql_selection.use_json_output: true/false
+#      * Only applies to commercial models (GPT-4o, Gemini) - local models use text format
+#      * Provides structured rankings with scores and reasoning for each candidate
+#    - Benefits: More reliable parsing, reduced regex complexity, better error handling
+#    - Fallback: If JSON parsing fails, automatically falls back to original text parsing
+#
+# 11. COMPREHENSIVE MODEL OUTPUT LOGGING:
+#    - The pipeline captures and logs ALL model interactions throughout the pipeline
+#    - Model Output Logging: Complete prompt and response logging for analysis
+#      * Configure with logging.log_model_outputs: true/false
+#      * Captures: prompts, raw outputs, parsed outputs, model metadata, timing info
+#      * Applies to: schema refinement, SQL generation, SQL ranking, SQL fixing
+#      * JSON Structure: Each model interaction saved with detailed metadata
+#      * INCLUDES FAILURES: Logs failed attempts, errors, exceptions, timeouts
+#      * Success/Failure Tracking: Each log entry marked with success=true/false
+#    - Benefits: Full model behavior analysis, debugging, performance tracking, failure analysis
+#    - Use Cases: Research analysis, model comparison, prompt optimization, debugging failures
+#    - Note: Creates larger log files - disable if storage is a concern
+#    - Enhanced Features: Raw outputs from both successful and failed LLM calls
+#
+# 12. INTELLIGENT MODEL REUSE:
+#    - The pipeline automatically reuses the same model across different purposes
+#    - Model Reuse: Same model shared between schema refinement, SQL ranking, and SQL fixing
+#      * Configure with models.enable_model_reuse: true/false
+#      * Saves memory and loading time when same model used for multiple purposes
+#      * Example: XiYan model loaded once, used for refinement, ranking, and fixing
+#      * Reuse efficiency tracking: Shows how many models avoided duplicate loading
+#    - Benefits: Reduced memory usage, faster pipeline startup, resource optimization
+#    - Use Cases: Limited GPU memory, faster iteration, cost optimization
+#    - Note: Set to false if you need separate model instances for different purposes
+#
+# 13. MODEL OUTPUTS IN PIPELINE RESULTS:
+#    - The pipeline can include all model raw outputs in the final pipeline_results.json file
+#    - Model Output Inclusion: Complete model interaction history saved in results
+#      * Configure with execution.include_model_outputs_in_results: true/false
+#      * Includes: prompts, raw outputs, parsed outputs, model metadata for each question
+#      * Organized by: phase, purpose, and chronological order
+#      * Provides: total model calls, success/failure tracking, timing information
+#    - Benefits: Complete traceability, easier debugging, model behavior analysis
+#    - Use Cases: Research analysis, debugging specific questions, model comparison
+#    - Structure: Each question gets a 'model_outputs' section with organized data
+#    - Note: Significantly increases file size - disable for production if storage is limited
+#
+# For more information, see the documentation in docs/
